@@ -6,6 +6,7 @@ import math
 from e70d2s import e70
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from ni_daq_9170 import NICounterTimeTrace
 from fitting_methods import twoDfittings
 from matplotlib.colors import Normalize
 from thorlabs_control import KDC101Controller
@@ -100,7 +101,7 @@ class IntensityMapGUI:
         self.center_x = tk.StringVar(value="20")
         self.center_y = tk.StringVar(value="20")
         self.rotation = tk.StringVar(value="0")
-        self.acq_time = tk.IntVar(value=50)
+        self.acq_time = tk.IntVar(value=100)
         self.pixel = tk.IntVar(value=10)
         self.frame = tk.StringVar(value="20")
 
@@ -152,13 +153,15 @@ class IntensityMapGUI:
         self.picoharp_port = tk.IntVar(value=65053)
 
     def create_scan_tab(self):
+        self.ni_trace = NICounterTimeTrace(parent=self.scan_tab, main_gui=self)
+        self.ni_trace.frame.pack(fill=tk.BOTH, expand=True)
         self.setup_connection()
         self.setup_plot()
         self.setup_controls()
 
     def setup_connection(self):        
         connection_frame = tk.Frame(self.scan_tab)
-        connection_frame.pack(side=tk.TOP, pady=5)
+        connection_frame.pack(side=tk.TOP, pady=0)
 
         # E70.D2S COM port inputs
         tk.Label(connection_frame, text="E70.D2S Add", font=self.arr18).pack(side=tk.LEFT)
@@ -173,18 +176,6 @@ class IntensityMapGUI:
         self.e70d2s_button = tk.Button(connection_frame, text="Connect", bg="red", font=self.arr18, command=self.e70d2s_connect)
         self.e70d2s_button.pack(side=tk.LEFT, padx=5)
 
-        # Picoharp Server IP and Port inputs
-        tk.Label(connection_frame, text="Picoquant IP", font=self.arr18, padx=5).pack(side=tk.LEFT)
-        picoharp_ip_entry = tk.Entry(connection_frame, textvariable=self.picoharp_ip, font=self.arr18, width=13)
-        picoharp_ip_entry.pack(side=tk.LEFT, padx=5)
-
-        tk.Label(connection_frame, text="Port", font=self.arr18).pack(side=tk.LEFT)
-        picoharp_port_entry = tk.Entry(connection_frame, textvariable=self.picoharp_port, font=self.arr18, width=6)
-        picoharp_port_entry.pack(side=tk.LEFT, padx=5)
-
-        self.picoharp_button = tk.Button(connection_frame, text="Connect", bg="red", font=self.arr18, command=self.picoharp_connect)
-        self.picoharp_button.pack(side=tk.LEFT, padx=5)
-
     def update_ports(self, combobox, variable, event=None):
         ports = [port.device for port in serial.tools.list_ports.comports()]
         combobox["values"] = ports    
@@ -193,7 +184,7 @@ class IntensityMapGUI:
 
     def setup_plot(self):
         self.fig, self.ax1 = plt.subplots(figsize=(6, 6))
-        self.fig.subplots_adjust(left=-1.5, right=0.9, bottom=0.1, top=0.9)
+        self.fig.subplots_adjust(left=-1.6, right=0.9, bottom=0.01, top=0.99)
 
         # Create the default intensity maps (initialized with zeros)
         self.raw_intensity1 = np.zeros((int(self.pixel.get()), int(self.pixel.get())))
@@ -297,7 +288,7 @@ class IntensityMapGUI:
 
     def setup_controls(self):
         controls_frame = tk.Frame(self.scan_tab)
-        controls_frame.pack(side=tk.TOP, pady=10)
+        controls_frame.pack(side=tk.TOP, pady=0)
 
         self.setup_status_colorbar_panel(controls_frame)
         self.setup_input_panel()
@@ -504,7 +495,6 @@ class IntensityMapGUI:
 
         current_angle = self.prm1.get_position()
         end_angle = current_angle + 360  # You can customize total rotation
-        self.send_start_to_picoharp(int(self.acq_time.get()))
         self.prm1.set_motion_params(float(self.speed.get()),float(self.accel.get()))
         time.sleep(1)
         while self.running_pol and current_angle <= end_angle:
@@ -525,8 +515,6 @@ class IntensityMapGUI:
     
     def stop_measurement_pol(self):
         self.running_pol = False
-        self.send_stop_to_picoharp()
-        self.picoharp_connected = False
         self.thorlabs_running = False
         self.thorlabs_thread = False
         self.goto_btn.config(state="normal")
@@ -626,7 +614,6 @@ class IntensityMapGUI:
                 self.running_thread = threading.Thread(target=self.run_mapping)
                 self.running_thread.start()
             else:
-                self.send_stop_to_picoharp()
                 self.index_x = -1
                 self.index_y = -1
                 self.is_running = False
@@ -651,31 +638,6 @@ class IntensityMapGUI:
         self.e70d2s.disconnect()
         self.e70d2s_button.config(text="Disconnect", bg="red")
 
-    def picoharp_connect(self):
-        if not self.picoharp_connected:
-            if self.picoharp_tcpip_connect():
-                self.picoharp_connected = True
-                self.picoharp_button.config(text="Connected", bg="green")
-        else:
-            self.picoharp_connected = False
-            self.picoharp_button.config(text="Disconnect", bg="red")
-    
-    def picoharp_tcpip_connect(self):
-        try:
-            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.sock.settimeout(2.0)
-            self.sock.connect((self.picoharp_ip.get(), int(self.picoharp_port.get())))
-            #print(f"Connected to {self.picoharp_ip.get()}:{self.picoharp_port.get()}")
-            return True
-        except socket.timeout:
-            raise TimeoutError(f"Connection to {self.picoharp_ip.get()}:{self.picoharp_port.get()} timed out")
-            self.sock = None
-            return False
-        except socket.error as e:
-            raise ConnectionError(f"Failed to connect to {self.picoharp_ip.get()}:{self.picoharp_port.get()}: {e}")
-            self.sock = None
-            return False
-
     def run_mapping(self):
         center_x = self.parse_input(self.center_x.get())
         center_y = self.parse_input(self.center_y.get())
@@ -695,8 +657,8 @@ class IntensityMapGUI:
         start_y = center_y + (frame / 2)  # Start from the top
 
         try:
-            self.send_start_to_picoharp(int(self.acq_time.get()))
-            time.sleep(1.5)
+            #self.ni_trace.mapping_running = True
+            time.sleep(1)
             self.manual_colorbar1 = False
             #print("Scan Loop")
             while self.is_running:
@@ -740,7 +702,10 @@ class IntensityMapGUI:
                             start_time = time.time()
                             while time.time() - start_time < acq_time:
                                 time.sleep(0.01)
-                            self.tcp_client2(x, y)
+                            intensity_value = self.ni_trace.current_cps
+                            #intensity_value, dt = self.ni_trace.measure_cps()
+                            self.intensity1.set(self.format_output(intensity_value))
+                            self.update_intensity_plot(x, y, intensity_value)
                         #if self.scan_mode.get() == "Bidirectional":
                         #    for x in x_rangeb:
                         #        if not self.nanonis_running:
@@ -765,61 +730,13 @@ class IntensityMapGUI:
                     self.start_button.config(text="Start", font=self.arr18, bg="green")
                     self.index_x = -1
                     self.index_y = -1
-                    self.send_stop_to_picoharp()
+                    #self.ni_trace.mapping_running = False
                     self.is_running = False
                     #print("Finish Scan Loop")
                     #self.client_socket1 = self.nanonis.close_socket()
                     #self.client_socket2 = self.client_socket2.close()
         except Exception as e:
             print(f"Client 1 error: {e}")
-
-    # TCP client 2 function
-    def tcp_client2(self, x, y):
-        message = f"D".encode('utf-8')
-        try:
-            # Send data only if running
-            if self.picoharp_connected:
-                self.sock.sendall(message)
-                data = b''
-                while len(data) < 4:
-                    packet = self.sock.recv(4 - len(data))
-                    if not packet:
-                        raise ConnectionError("Socket connection broken")
-                    data += packet
-
-                # Unpack the received data (intensity value)
-                intensity_value = struct.unpack('!I', data)[0]
-                self.intensity1.set(self.format_output(intensity_value))
-
-                # Update the plot with the received intensity value for the given (x, y)
-                if x >= 0 and y >=0:
-                    self.update_intensity_plot(x, y, intensity_value)
-                else:
-                    return intensity_value
-
-        except Exception as e:
-            print(f"Error receiving data to Picoharp: {e}")
-
-    def send_start_to_picoharp(self, binwidth):
-        message = f"M{binwidth}M".encode('utf-8')
-        try:
-            if self.picoharp_connected:
-                self.sock.sendall(message)
-                #print("Sent 'Start' to server2")
-                receive = self.sock.recv(1024).decode('utf-8')
-        except Exception as e:
-            print(f"Error sending Start to Picoharp: {e}")
-
-    def send_stop_to_picoharp(self):
-        message = f"S".encode('utf-8')
-        try:
-            if self.picoharp_connected:
-                # Send "Stop" message to server2
-                self.sock.sendall(message)
-                #print("Sent 'Stop' to server2")
-                receive = self.sock.recv(1024).decode('utf-8')
-        except Exception as e:
-            print(f"Error sending Stop to Picoharp: {e}")
 
     def update_intensity_plot(self, x, y, intensity_value):
         if self.is_running:
@@ -918,8 +835,10 @@ class IntensityMapGUI:
         start_y = center_y + (frame / 2)  # Start from the top
         
         current_x = start_x + x * resolution
-        current_y = start_y - (frame-y-1) * resolution
+        #current_y = start_y - (frame-y-1) * resolution
+        current_y = start_y - y * resolution
         cur_x, cur_y = self.rotate_point(current_x, current_y, center_x, center_y, rotation*(-1))
+        #print(f"cur_x: {cur_x}, cur_y: {cur_y}")
 
         dx = cur_x - float(self.current_x.get())
         dy = cur_y - float(self.current_y.get())
